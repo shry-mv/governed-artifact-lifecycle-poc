@@ -1,4 +1,9 @@
 import hashlib
+import json
+import os
+import platform
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -110,10 +115,11 @@ def calculate_sha256(file_path: Path) -> str:
     return sha256.hexdigest()
 
 
-def write_checksum_file(artifact_path: Path) -> Path:
-    """Write the artifact SHA-256 checksum to a companion file."""
-
-    checksum = calculate_sha256(artifact_path)
+def write_checksum_file(
+    artifact_path: Path,
+    checksum: str,
+) -> Path:
+    """Write the artifact checksum to a companion file."""
 
     checksum_path = (
         artifact_path.parent
@@ -128,6 +134,74 @@ def write_checksum_file(artifact_path: Path) -> Path:
     return checksum_path
 
 
+def run_git_command(*arguments: str) -> str:
+    """Run a Git command and return its text output."""
+
+    result = subprocess.run(
+        ["git", *arguments],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    return result.stdout.strip()
+
+
+def collect_git_metadata() -> dict[str, str | bool]:
+    """Collect traceability information from the Git repository."""
+
+    commit = run_git_command("rev-parse", "HEAD")
+    branch = run_git_command("branch", "--show-current")
+    status = run_git_command("status", "--porcelain")
+
+    return {
+        "commit": commit,
+        "branch": branch,
+        "working_tree_clean": status == "",
+    }
+
+
+def write_build_metadata(
+    artifact_path: Path,
+    version: str,
+    checksum: str,
+) -> Path:
+    """Create a JSON document describing how the artifact was built."""
+
+    git_metadata = collect_git_metadata()
+
+    metadata = {
+        "schema_version": "1.0",
+        "project": {
+            "name": PROJECT_NAME,
+            "version": version,
+        },
+        "artifact": {
+            "name": artifact_path.name,
+            "size_bytes": artifact_path.stat().st_size,
+            "sha256": checksum,
+        },
+        "source": git_metadata,
+        "build": {
+            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "build_number": os.getenv("BUILD_NUMBER", "local"),
+            "builder": os.getenv("BUILD_ACTOR", "local-developer"),
+            "python_version": platform.python_version(),
+            "operating_system": platform.system(),
+        },
+    }
+
+    metadata_path = DIST_DIR / "build-metadata.json"
+
+    metadata_path.write_text(
+        json.dumps(metadata, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    return metadata_path
+
+
 def main() -> None:
     """Execute the complete artifact build process."""
 
@@ -135,11 +209,24 @@ def main() -> None:
     validate_pyproject_version(version)
 
     artifact_path = build_artifact(version)
-    checksum_path = write_checksum_file(artifact_path)
+    checksum = calculate_sha256(artifact_path)
+
+    checksum_path = write_checksum_file(
+        artifact_path,
+        checksum,
+    )
+
+    metadata_path = write_build_metadata(
+        artifact_path,
+        version,
+        checksum,
+    )
 
     print(f"Artifact successfully built: {artifact_path}")
     print(f"Checksum file created: {checksum_path}")
+    print(f"Build metadata created: {metadata_path}")
     print(f"Artifact version: {version}")
+    print(f"Artifact SHA-256: {checksum}")
 
 
 if __name__ == "__main__":
