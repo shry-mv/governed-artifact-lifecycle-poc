@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -30,6 +31,11 @@ def read_version() -> str:
 def validate_pyproject_version(expected_version: str) -> None:
     """Confirm that pyproject.toml and VERSION contain the same version."""
 
+    if not PYPROJECT_FILE.exists():
+        raise FileNotFoundError(
+            f"pyproject.toml file not found: {PYPROJECT_FILE}"
+        )
+
     with PYPROJECT_FILE.open("rb") as pyproject_file:
         pyproject = tomllib.load(pyproject_file)
 
@@ -46,6 +52,11 @@ def validate_pyproject_version(expected_version: str) -> None:
 def build_artifact(version: str) -> Path:
     """Create a ZIP artifact containing the application files."""
 
+    if not SOURCE_DIR.exists():
+        raise FileNotFoundError(
+            f"Application source directory not found: {SOURCE_DIR}"
+        )
+
     DIST_DIR.mkdir(exist_ok=True)
 
     artifact_name = f"{PROJECT_NAME}-{version}.zip"
@@ -55,7 +66,11 @@ def build_artifact(version: str) -> Path:
     if artifact_path.exists():
         artifact_path.unlink()
 
-    with ZipFile(artifact_path, mode="w", compression=ZIP_DEFLATED) as zip_file:
+    with ZipFile(
+        artifact_path,
+        mode="w",
+        compression=ZIP_DEFLATED,
+    ) as zip_file:
         for source_file in sorted(SOURCE_DIR.rglob("*.py")):
             relative_source_path = source_file.relative_to(SOURCE_DIR)
 
@@ -65,7 +80,10 @@ def build_artifact(version: str) -> Path:
                 / relative_source_path
             )
 
-            zip_file.write(source_file, archive_path.as_posix())
+            zip_file.write(
+                source_file,
+                archive_path.as_posix(),
+            )
 
         zip_file.write(
             VERSION_FILE,
@@ -80,14 +98,47 @@ def build_artifact(version: str) -> Path:
     return artifact_path
 
 
+def calculate_sha256(file_path: Path) -> str:
+    """Calculate the SHA-256 checksum of a file."""
+
+    sha256 = hashlib.sha256()
+
+    with file_path.open("rb") as input_file:
+        while chunk := input_file.read(8192):
+            sha256.update(chunk)
+
+    return sha256.hexdigest()
+
+
+def write_checksum_file(artifact_path: Path) -> Path:
+    """Write the artifact SHA-256 checksum to a companion file."""
+
+    checksum = calculate_sha256(artifact_path)
+
+    checksum_path = (
+        artifact_path.parent
+        / f"{artifact_path.name}.sha256"
+    )
+
+    checksum_path.write_text(
+        f"{checksum}  {artifact_path.name}\n",
+        encoding="utf-8",
+    )
+
+    return checksum_path
+
+
 def main() -> None:
     """Execute the complete artifact build process."""
 
     version = read_version()
     validate_pyproject_version(version)
+
     artifact_path = build_artifact(version)
+    checksum_path = write_checksum_file(artifact_path)
 
     print(f"Artifact successfully built: {artifact_path}")
+    print(f"Checksum file created: {checksum_path}")
     print(f"Artifact version: {version}")
 
 
