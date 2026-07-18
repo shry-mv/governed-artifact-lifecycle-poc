@@ -1,0 +1,9 @@
+[project]
+name = "governed-artifact-lifecycle"
+version = "0.1.0"
+description = "A POC for a governed software artifact lifecycle."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
